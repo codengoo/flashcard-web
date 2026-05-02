@@ -15,7 +15,7 @@ export async function createTerm(formData: FormData) {
     term: term.trim(),
     definition: definition.trim(),
     example: example?.trim() || null,
-    deck_id: deckId ? Number(deckId) : null,
+    deck_id: deckId ?? null,
   });
   if (error) throw new Error(error.message);
   revalidatePath("/");

@@ -14,6 +14,7 @@ import {
   FieldError,
   toast,
 } from "@heroui/react";
+import { TbEdit, TbTrash, TbPlus, TbStack2 } from "react-icons/tb";
 import { createDeck, updateDeck, deleteDeck } from "@/app/actions";
 import type { Deck } from "@/lib/supabase";
 
@@ -24,8 +25,8 @@ function EditDeckModal({ deck }: { deck: Deck }) {
 
   return (
     <Modal>
-      <Button size="sm" variant="outline">
-        Sửa
+      <Button size="sm" variant="outline" isIconOnly aria-label="Sửa deck">
+        <TbEdit size={16} />
       </Button>
       <Modal.Backdrop>
         <Modal.Container size="sm">
@@ -109,7 +110,7 @@ function DeleteDeckButton({ id }: { id: number }) {
       }
       className="text-danger"
     >
-      Xoá
+      <TbTrash size={16} />
     </Button>
   );
 }
@@ -143,7 +144,10 @@ export function DecksTab({ decks }: { decks: Deck[] }) {
       {/* Decks table */}
       <Card>
         <CardHeader>
-          <h2 className="text-lg font-semibold">Danh sách Decks ({decks.length})</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+              <TbStack2 size={20} className="text-primary" />
+              Danh sách Decks ({decks.length})
+            </h2>
         </CardHeader>
         <CardContent>
           <Table>
@@ -190,7 +194,10 @@ export function DecksTab({ decks }: { decks: Deck[] }) {
       {/* Add deck form */}
       <Card>
         <CardHeader>
-          <h2 className="text-lg font-semibold">Thêm Deck mới</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+              <TbPlus size={20} className="text-primary" />
+              Thêm Deck mới
+            </h2>
         </CardHeader>
         <CardContent>
           <form key={formKey} onSubmit={handleAdd} className="flex flex-col gap-4">
@@ -211,6 +218,7 @@ export function DecksTab({ decks }: { decks: Deck[] }) {
                 isPending={isPending}
                 isDisabled={isPending}
               >
+                <TbPlus size={16} />
                 Tạo Deck
               </Button>
             </div>
