@@ -1,6 +1,14 @@
 ﻿"use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState } from "react";
+import {
+  useReactTable,
+  getCoreRowModel,
+  createColumnHelper,
+  type VisibilityState,
+  type Row,
+  type Cell,
+} from "@tanstack/react-table";
 import {
   Table,
   Button,
@@ -9,59 +17,95 @@ import {
   CardContent,
   Chip,
   Modal,
-  TextField,
-  Label,
-  Input,
-  TextArea,
-  FieldError,
   Pagination,
-  toast,
+  useOverlayState,
 } from "@heroui/react";
-import { TbEdit, TbTrash, TbPlus, TbFilter, TbLayersIntersect } from "react-icons/tb";
-import { createTerm, updateTerm, deleteTerm } from "@/app/actions";
+import { Formik, Form } from "formik";
+import * as Yup from "yup";
+import { TbEdit, TbTrash, TbPlus, TbFilter, TbLayersIntersect, TbColumns, TbInbox } from "react-icons/tb";
+import { useTermActions } from "@/app/hooks/useTermActions";
+import { FormField } from "@/app/components/ui/FormField";
+import { DeckSelectField } from "@/app/components/ui/DeckSelectField";
+import { DeckFilterAutocomplete } from "@/app/components/ui/DeckFilterAutocomplete";
 import type { Term, Deck } from "@/lib/supabase";
 
 const PAGE_SIZE = 10;
 
-// ── Pagination helpers ────────────────────────────────────────
+const termSchema = Yup.object({
+  term: Yup.string().required("Term là bắt buộc"),
+  definition: Yup.string().required("Definition là bắt buộc"),
+  example: Yup.string(),
+  deck_id: Yup.number().nullable().default(null),
+});
+
+// ── Column definitions ────────────────────────────────────────
+
+const columnHelper = createColumnHelper<Term>();
+
+const TERM_COLUMNS = [
+  columnHelper.accessor("term", { id: "term", header: "Term", enableHiding: false }),
+  columnHelper.accessor("definition", { id: "definition", header: "Definition" }),
+  columnHelper.accessor("example", { id: "example", header: "Example" }),
+  columnHelper.accessor((row) => row.deck?.name ?? null, { id: "deck", header: "Deck" }),
+  columnHelper.accessor("created_at", { id: "created_at", header: "Ngày tạo" }),
+  columnHelper.display({ id: "actions", header: "Thao tác", enableHiding: false }),
+];
+
+// ── Page list helper ──────────────────────────────────────────
 
 function buildPageList(current: number, total: number): Array<number | "e"> {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
   const pages: Array<number | "e"> = [1];
   if (current > 3) pages.push("e");
-  for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) pages.push(i);
+  for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++)
+    pages.push(i);
   if (current < total - 2) pages.push("e");
   pages.push(total);
   return pages;
 }
 
-function TermsPagination({ page, total, onChange }: { page: number; total: number; onChange: (p: number) => void }) {
-  if (total <= 1) return null;
+// ── Column visibility toggle ──────────────────────────────────
+
+function ColumnVisibilityToggle({
+  table,
+}: {
+  table: ReturnType<typeof useReactTable<Term>>;
+}) {
+  const [open, setOpen] = useState(false);
+  const hidable = table.getAllLeafColumns().filter((c) => c.columnDef.enableHiding !== false);
+
   return (
-    <div className="flex items-center justify-center pt-3">
-      <Pagination>
-        <Pagination.Content>
-          <Pagination.Item>
-            <Pagination.Previous isDisabled={page === 1} onPress={() => onChange(page - 1)}>
-              <Pagination.PreviousIcon /><span>Trước</span>
-            </Pagination.Previous>
-          </Pagination.Item>
-          {buildPageList(page, total).map((p, i) =>
-            p === "e" ? (
-              <Pagination.Item key={`e${i}`}><Pagination.Ellipsis /></Pagination.Item>
-            ) : (
-              <Pagination.Item key={p}>
-                <Pagination.Link isActive={p === page} onPress={() => onChange(p as number)}>{p}</Pagination.Link>
-              </Pagination.Item>
-            )
-          )}
-          <Pagination.Item>
-            <Pagination.Next isDisabled={page === total} onPress={() => onChange(page + 1)}>
-              <span>Sau</span><Pagination.NextIcon />
-            </Pagination.Next>
-          </Pagination.Item>
-        </Pagination.Content>
-      </Pagination>
+    <div className="relative">
+      <Button
+        size="sm"
+        variant="outline"
+        onPress={() => setOpen((v) => !v)}
+        className="gap-1 text-xs"
+      >
+        <TbColumns size={14} />
+        Cột
+      </Button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-50 bg-surface border border-border rounded-lg p-3 flex flex-col gap-2 shadow-lg min-w-44">
+            {hidable.map((col) => (
+              <label
+                key={col.id}
+                className="flex items-center gap-2 text-sm cursor-pointer select-none"
+              >
+                <input
+                  type="checkbox"
+                  checked={col.getIsVisible()}
+                  onChange={() => col.toggleVisibility()}
+                  className="rounded"
+                />
+                {col.columnDef.header as string}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -69,90 +113,96 @@ function TermsPagination({ page, total, onChange }: { page: number; total: numbe
 // ── Edit term modal ───────────────────────────────────────────
 
 function EditTermModal({ term, decks }: { term: Term; decks: Deck[] }) {
-  const [isPending, startTransition] = useTransition();
+  const state = useOverlayState({ defaultOpen: false });
+  const { edit, isPending } = useTermActions();
+
+  const initialValues = {
+    term: term.term,
+    definition: term.definition,
+    example: term.example ?? "",
+    deck_id: term.deck_id,
+  };
+
   return (
-    <Modal>
-      <Button size="sm" variant="outline" isIconOnly aria-label="Sửa term">
+    <>
+      <Button size="sm" variant="outline" isIconOnly aria-label="Sửa term" onPress={state.open}>
         <TbEdit size={16} />
       </Button>
-      <Modal.Backdrop>
-        <Modal.Container size="md">
-          <Modal.Dialog>
-            {({ close }) => (
-              <>
-                <Modal.CloseTrigger />
-                <Modal.Header><Modal.Heading>Sửa Term</Modal.Heading></Modal.Header>
-                <Modal.Body className="flex flex-col gap-4">
-                  <form
-                    id={`edit-term-${term.id}`}
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const fd = new FormData(e.currentTarget);
-                      startTransition(async () => {
-                        try {
-                          await updateTerm(term.id, {
-                            term: fd.get("term") as string,
-                            definition: fd.get("definition") as string,
-                            example: (fd.get("example") as string) || null,
-                            deck_id: fd.get("deck_id") ? Number(fd.get("deck_id")) : null,
-                          });
-                          toast.success("Đã cập nhật term!");
-                          close();
-                        } catch (err) {
-                          toast.danger(err instanceof Error ? err.message : "Lỗi server");
-                        }
-                      });
-                    }}
-                    className="flex flex-col gap-4"
-                  >
-                    <TextField isRequired name="term" defaultValue={term.term} className="w-full">
-                      <Label>Term</Label><Input /><FieldError />
-                    </TextField>
-                    <TextField isRequired name="definition" defaultValue={term.definition} className="w-full">
-                      <Label>Definition</Label><TextArea rows={3} /><FieldError />
-                    </TextField>
-                    <TextField name="example" defaultValue={term.example ?? ""} className="w-full">
-                      <Label>Example</Label><TextArea rows={2} />
-                    </TextField>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-sm font-medium text-foreground">Deck</label>
-                      <select
-                        name="deck_id"
-                        defaultValue={term.deck_id ?? ""}
-                        className="w-full rounded-lg border border-default-300 bg-default-100 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+      <Modal>
+        <Modal.Backdrop isOpen={state.isOpen} onOpenChange={state.toggle}>
+          <Modal.Container size="md">
+            <Modal.Dialog>
+              {({ close }) => (
+                <Formik
+                  initialValues={initialValues}
+                  validationSchema={termSchema}
+                  enableReinitialize
+                  onSubmit={(values) => {
+                    edit(term.id, { ...values, deck_id: values.deck_id ?? null }, close);
+                  }}
+                >
+                  <Form id={`edit-term-${term.id}`}>
+                    <Modal.CloseTrigger />
+                    <Modal.Header>
+                      <Modal.Heading>Sửa Term</Modal.Heading>
+                    </Modal.Header>
+                    <Modal.Body className="flex flex-col gap-4">
+                      <FormField name="term" label="Term" isRequired placeholder="Nhập từ hoặc cụm từ..." />
+                      <FormField
+                        name="definition"
+                        label="Definition"
+                        isRequired
+                        as="textarea"
+                        rows={3}
+                        placeholder="Nhập định nghĩa..."
+                      />
+                      <FormField
+                        name="example"
+                        label="Example"
+                        as="textarea"
+                        rows={2}
+                        placeholder="Nhập ví dụ (tuỳ chọn)..."
+                      />
+                      <DeckSelectField name="deck_id" label="Deck" decks={decks} />
+                    </Modal.Body>
+                    <Modal.Footer>
+                      <Button type="button" variant="ghost" onPress={close}>
+                        Huỷ
+                      </Button>
+                      <Button
+                        type="submit"
+                        form={`edit-term-${term.id}`}
+                        variant="primary"
+                        isPending={isPending}
+                        isDisabled={isPending}
                       >
-                        <option value="">Không có deck</option>
-                        {decks.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                      </select>
-                    </div>
-                  </form>
-                </Modal.Body>
-                <Modal.Footer>
-                  <Button type="button" variant="ghost" slot="close">Huỷ</Button>
-                  <Button type="submit" form={`edit-term-${term.id}`} variant="primary" isPending={isPending} isDisabled={isPending}>Lưu</Button>
-                </Modal.Footer>
-              </>
-            )}
-          </Modal.Dialog>
-        </Modal.Container>
-      </Modal.Backdrop>
-    </Modal>
+                        Lưu
+                      </Button>
+                    </Modal.Footer>
+                  </Form>
+                </Formik>
+              )}
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
+    </>
   );
 }
 
 // ── Delete button ─────────────────────────────────────────────
 
 function DeleteTermButton({ id }: { id: number }) {
-  const [isPending, startTransition] = useTransition();
+  const { remove, isPending } = useTermActions();
   return (
     <Button
-      size="sm" variant="ghost" isIconOnly
-      isDisabled={isPending} isPending={isPending}
+      size="sm"
+      variant="ghost"
+      isIconOnly
+      isDisabled={isPending}
+      isPending={isPending}
       aria-label="Xoá term"
-      onPress={() => startTransition(async () => {
-        try { await deleteTerm(id); toast.success("Đã xoá term!"); }
-        catch (err) { toast.danger(err instanceof Error ? err.message : "Lỗi server"); }
-      })}
+      onPress={() => remove(id)}
       className="text-danger"
     >
       <TbTrash size={16} />
@@ -162,58 +212,103 @@ function DeleteTermButton({ id }: { id: number }) {
 
 // ── Main TermsTab ─────────────────────────────────────────────
 
-interface Props { terms: Term[]; decks: Deck[]; currentDeck: Deck | null; }
+interface Props {
+  terms: Term[];
+  decks: Deck[];
+  onGoToDecks: () => void;
+}
 
-export function TermsTab({ terms, decks, currentDeck }: Props) {
-  const [isPending, startTransition] = useTransition();
-  const [formKey, setFormKey] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+export function TermsTab({ terms, decks, onGoToDecks }: Props) {
+  const { add, isPending } = useTermActions();
   const [page, setPage] = useState(1);
-  const [filterDeckIds, setFilterDeckIds] = useState<Set<number>>(new Set());
+  const [filterDeckIds, setFilterDeckIds] = useState<string[]>([]);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 
-  // Sort newest first
-  const sorted = [...terms].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  const defaultDeckId = decks[0]?.id ?? null;
+
+  const sorted = useMemo(
+    () =>
+      [...terms].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ),
+    [terms]
   );
 
-  // Filter by selected decks (multi-select)
-  const filtered =
-    filterDeckIds.size === 0
-      ? sorted
-      : sorted.filter((t) => t.deck_id !== null && filterDeckIds.has(t.deck_id));
+  const filtered = useMemo(
+    () =>
+      filterDeckIds.length === 0
+        ? sorted
+        : sorted.filter((t) => t.deck_id !== null && filterDeckIds.includes(String(t.deck_id))),
+    [sorted, filterDeckIds]
+  );
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  function toggleDeckFilter(id: number) {
-    setFilterDeckIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  const paged = useMemo(
+    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [filtered, safePage]
+  );
+
+  const tanTable = useReactTable({
+    data: paged,
+    columns: TERM_COLUMNS,
+    state: { columnVisibility },
+    onColumnVisibilityChange: setColumnVisibility,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  function handleFilterChange(ids: string[]) {
+    setFilterDeckIds(ids);
     setPage(1);
   }
 
-  function handleAdd(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    // Explicitly set deck_id from prop to avoid hidden-input rendering race
-    if (currentDeck) formData.set("deck_id", String(currentDeck.id));
-    else formData.delete("deck_id");
-    setError(null);
-    startTransition(async () => {
-      try {
-        await createTerm(formData);
-        toast.success("Đã thêm term!");
-        setFormKey((k) => k + 1);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Lỗi server";
-        setError(msg);
-        toast.danger(msg);
-      }
-    });
+  function renderCell(colId: string, term: Term) {
+    switch (colId) {
+      case "term":
+        return <span className="font-semibold">{term.term}</span>;
+      case "definition":
+        return <span className="line-clamp-2 max-w-48 text-sm">{term.definition}</span>;
+      case "example":
+        return (
+          <span className="line-clamp-2 max-w-40 text-sm text-default-500">
+            {term.example ?? "—"}
+          </span>
+        );
+      case "deck":
+        return term.deck ? (
+          <Chip size="sm" variant="secondary">
+            {term.deck.name}
+          </Chip>
+        ) : (
+          <span className="text-default-400 text-sm">—</span>
+        );
+      case "created_at":
+        return (
+          <span className="text-sm text-default-500 whitespace-nowrap">
+            {new Date(term.created_at).toLocaleDateString("vi-VN")}
+          </span>
+        );
+      case "actions":
+        return (
+          <div className="flex items-center gap-1">
+            <EditTermModal term={term} decks={decks} />
+            <DeleteTermButton id={term.id} />
+          </div>
+        );
+      default:
+        return null;
+    }
   }
+
+  const addInitialValues = {
+    term: "",
+    definition: "",
+    example: "",
+    deck_id: defaultDeckId,
+  };
+
+  const visibleCols = tanTable.getVisibleLeafColumns();
 
   return (
     <div className="flex flex-col gap-6">
@@ -229,35 +324,25 @@ export function TermsTab({ terms, decks, currentDeck }: Props) {
                   ({filtered.length}/{terms.length})
                 </span>
               </h2>
+              <ColumnVisibilityToggle table={tanTable} />
             </div>
 
-            {/* Multi-select deck filter */}
+            {/* Deck filter */}
             {decks.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-default-500 flex items-center gap-1">
-                  <TbFilter size={14} /> Lọc theo deck:
-                </span>
-                {decks.map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => toggleDeckFilter(d.id)}
-                    className="focus:outline-none"
-                  >
-                    <Chip
-                      size="sm"
-                      variant={filterDeckIds.has(d.id) ? "primary" : "soft"}
-                      className="cursor-pointer"
-                    >
-                      {d.name}
-                    </Chip>
-                  </button>
-                ))}
-                {filterDeckIds.size > 0 && (
+              <div className="flex items-center gap-2">
+                <TbFilter size={14} className="text-default-400 shrink-0" />
+                <div className="w-60">
+                  <DeckFilterAutocomplete
+                    decks={decks}
+                    value={filterDeckIds}
+                    onChange={handleFilterChange}
+                  />
+                </div>
+                {filterDeckIds.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => { setFilterDeckIds(new Set()); setPage(1); }}
-                    className="text-xs text-default-400 hover:text-foreground underline"
+                    onClick={() => handleFilterChange([])}
+                    className="text-xs text-default-400 hover:text-foreground underline whitespace-nowrap"
                   >
                     Xoá lọc
                   </button>
@@ -268,103 +353,153 @@ export function TermsTab({ terms, decks, currentDeck }: Props) {
         </CardHeader>
         <CardContent>
           <Table>
-            <Table.ScrollContainer>
+            <Table.ResizableContainer>
               <Table.Content aria-label="Danh sách terms">
-                <Table.Header>
-                  <Table.Column isRowHeader>Term</Table.Column>
-                  <Table.Column>Definition</Table.Column>
-                  <Table.Column>Example</Table.Column>
-                  <Table.Column>Deck</Table.Column>
-                  <Table.Column>Ngày tạo</Table.Column>
-                  <Table.Column>Thao tác</Table.Column>
+                <Table.Header columns={visibleCols}>
+                  {(col) => (
+                    <Table.Column id={col.id} isRowHeader={col.id === "term"}>
+                      {() => (
+                        <>
+                          {col.columnDef.header as string}
+                          {col.id !== "actions" && <Table.ColumnResizer />}
+                        </>
+                      )}
+                    </Table.Column>
+                  )}
                 </Table.Header>
                 <Table.Body
-                  items={paged}
+                  items={tanTable.getRowModel().rows as Row<Term>[]}
                   renderEmptyState={() => (
-                    <p className="py-8 text-center text-sm text-default-500">
-                      {filterDeckIds.size > 0
-                        ? "Không có term nào trong deck đã chọn."
-                        : "Chưa có term nào. Hãy thêm mới bên dưới!"}
-                    </p>
+                    <div className="py-12 flex flex-col items-center gap-3 text-default-400">
+                      <TbInbox size={40} className="text-default-300" />
+                      <div className="text-center">
+                        <p className="font-medium text-sm">
+                          {filterDeckIds.length > 0 ? "Không có term nào" : "Chưa có term nào"}
+                        </p>
+                        <p className="text-xs mt-1 text-default-300">
+                          {filterDeckIds.length > 0
+                            ? "Thử thay đổi bộ lọc"
+                            : "Hãy thêm term mới bên dưới"}
+                        </p>
+                      </div>
+                    </div>
                   )}
                 >
-                  {(term) => (
-                    <Table.Row id={term.id}>
-                      <Table.Cell><span className="font-semibold">{term.term}</span></Table.Cell>
-                      <Table.Cell><span className="line-clamp-2 max-w-48 text-sm">{term.definition}</span></Table.Cell>
-                      <Table.Cell><span className="line-clamp-2 max-w-40 text-sm text-default-500">{term.example ?? "—"}</span></Table.Cell>
-                      <Table.Cell>
-                        {term.deck
-                          ? <Chip size="sm" variant="secondary">{term.deck.name}</Chip>
-                          : <span className="text-default-400 text-sm">—</span>}
-                      </Table.Cell>
-                      <Table.Cell>
-                        <span className="text-sm text-default-500 whitespace-nowrap">
-                          {new Date(term.created_at).toLocaleDateString("vi-VN")}
-                        </span>
-                      </Table.Cell>
-                      <Table.Cell>
-                        <div className="flex items-center gap-1">
-                          <EditTermModal term={term} decks={decks} />
-                          <DeleteTermButton id={term.id} />
-                        </div>
-                      </Table.Cell>
+                  {(row: Row<Term>) => (
+                    <Table.Row id={row.original.id}>
+                      <Table.Collection items={row.getVisibleCells() as Cell<Term, unknown>[]}>
+                        {(cell: Cell<Term, unknown>) => (
+                          <Table.Cell>{renderCell(cell.column.id, row.original)}</Table.Cell>
+                        )}
+                      </Table.Collection>
                     </Table.Row>
                   )}
                 </Table.Body>
               </Table.Content>
-            </Table.ScrollContainer>
-          </Table>
+            </Table.ResizableContainer>
 
-          <TermsPagination page={safePage} total={totalPages} onChange={setPage} />
-          {filtered.length > 0 && (
-            <p className="text-center text-xs text-default-400 pt-1">
-              Trang {safePage}/{totalPages} &middot; {filtered.length} terms
-            </p>
-          )}
+            {totalPages > 1 && (
+              <Table.Footer>
+                <div className="flex items-center justify-between w-full px-2 py-1">
+                  <span className="text-xs text-default-400">
+                    Trang {safePage}/{totalPages} &middot; {filtered.length} terms
+                  </span>
+                  <Pagination>
+                    <Pagination.Content>
+                      <Pagination.Item>
+                        <Pagination.Previous
+                          isDisabled={safePage === 1}
+                          onPress={() => setPage((p) => p - 1)}
+                        >
+                          <Pagination.PreviousIcon />
+                        </Pagination.Previous>
+                      </Pagination.Item>
+                      {buildPageList(safePage, totalPages).map((p, i) =>
+                        p === "e" ? (
+                          <Pagination.Item key={`e${i}`}>
+                            <Pagination.Ellipsis />
+                          </Pagination.Item>
+                        ) : (
+                          <Pagination.Item key={p}>
+                            <Pagination.Link
+                              isActive={p === safePage}
+                              onPress={() => setPage(p as number)}
+                            >
+                              {p}
+                            </Pagination.Link>
+                          </Pagination.Item>
+                        )
+                      )}
+                      <Pagination.Item>
+                        <Pagination.Next
+                          isDisabled={safePage === totalPages}
+                          onPress={() => setPage((p) => p + 1)}
+                        >
+                          <Pagination.NextIcon />
+                        </Pagination.Next>
+                      </Pagination.Item>
+                    </Pagination.Content>
+                  </Pagination>
+                </div>
+              </Table.Footer>
+            )}
+          </Table>
         </CardContent>
       </Card>
 
       {/* Add term form card */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <TbPlus size={20} className="text-primary" />
-              Thêm Term mới
-            </h2>
-            <div className="flex items-center gap-2 text-sm text-default-500">
-              Đang thêm vào:
-              {currentDeck
-                ? <Chip size="sm" variant="primary">{currentDeck.name}</Chip>
-                : <Chip size="sm" variant="tertiary">Không có deck</Chip>}
-            </div>
-          </div>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <TbPlus size={20} className="text-primary" />
+            Thêm Term mới
+          </h2>
         </CardHeader>
         <CardContent>
-          <form key={formKey} onSubmit={handleAdd} className="flex flex-col gap-4">
-            <TextField isRequired name="term" className="w-full">
-              <Label>Term</Label>
-              <Input placeholder="Nhập từ hoặc cụm từ..." />
-              <FieldError />
-            </TextField>
-            <TextField isRequired name="definition" className="w-full">
-              <Label>Definition</Label>
-              <TextArea rows={3} placeholder="Nhập định nghĩa..." />
-              <FieldError />
-            </TextField>
-            <TextField name="example" className="w-full">
-              <Label>Example (tuỳ chọn)</Label>
-              <TextArea rows={2} placeholder="Nhập ví dụ..." />
-            </TextField>
-            {error && <p className="text-sm text-danger">{error}</p>}
-            <div className="flex justify-end">
-              <Button type="submit" variant="primary" isPending={isPending} isDisabled={isPending}>
-                <TbPlus size={16} />
-                Thêm Term
-              </Button>
-            </div>
-          </form>
+          <Formik
+            initialValues={addInitialValues}
+            validationSchema={termSchema}
+            enableReinitialize
+            onSubmit={(values, { resetForm }) => {
+              add({ ...values, deck_id: values.deck_id ?? null }, resetForm);
+            }}
+          >
+            <Form className="flex flex-col gap-4">
+              <FormField name="term" label="Term" isRequired placeholder="Nhập từ hoặc cụm từ..." />
+              <FormField
+                name="definition"
+                label="Definition"
+                isRequired
+                as="textarea"
+                rows={3}
+                placeholder="Nhập định nghĩa..."
+              />
+              <FormField
+                name="example"
+                label="Example"
+                as="textarea"
+                rows={2}
+                placeholder="Nhập ví dụ (tuỳ chọn)..."
+              />
+              <DeckSelectField
+                name="deck_id"
+                label="Deck"
+                decks={decks}
+                onCreateDeck={onGoToDecks}
+              />
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  isPending={isPending}
+                  isDisabled={isPending}
+                >
+                  <TbPlus size={16} />
+                  Thêm Term
+                </Button>
+              </div>
+            </Form>
+          </Formik>
         </CardContent>
       </Card>
     </div>

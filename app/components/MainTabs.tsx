@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Tabs } from "@heroui/react";
 import { TbCards, TbStack2 } from "react-icons/tb";
 import type { Term, Deck } from "@/lib/supabase";
@@ -12,10 +13,21 @@ interface Props {
 }
 
 export function MainTabs({ terms, decks }: Props) {
-  const latestDeck = decks[0] ?? null;
+  const [selectedKey, setSelectedKey] = useState("terms");
+  const [addDeckFocusTrigger, setAddDeckFocusTrigger] = useState(0);
+
+  function goToDecks() {
+    setSelectedKey("decks");
+    setAddDeckFocusTrigger((c) => c + 1);
+  }
 
   return (
-    <Tabs defaultSelectedKey="terms" variant="primary" className="w-full">
+    <Tabs
+      selectedKey={selectedKey}
+      onSelectionChange={(key) => setSelectedKey(String(key))}
+      variant="primary"
+      className="w-full"
+    >
       <Tabs.ListContainer>
         <Tabs.List aria-label="Quản lý flashcard" className="w-full">
           <Tabs.Tab id="terms" className="flex items-center gap-2 px-5 py-3">
@@ -31,10 +43,10 @@ export function MainTabs({ terms, decks }: Props) {
         </Tabs.List>
       </Tabs.ListContainer>
       <Tabs.Panel id="terms" className="pt-4">
-        <TermsTab terms={terms} decks={decks} currentDeck={latestDeck} />
+        <TermsTab terms={terms} decks={decks} onGoToDecks={goToDecks} />
       </Tabs.Panel>
       <Tabs.Panel id="decks" className="pt-4">
-        <DecksTab decks={decks} />
+        <DecksTab decks={decks} addDeckFocusTrigger={addDeckFocusTrigger} />
       </Tabs.Panel>
     </Tabs>
   );

@@ -1,34 +1,9 @@
-import { supabase, type Term, type Deck } from "@/lib/supabase";
+import { fetchTerms } from "@/lib/services/terms";
+import { fetchDecks } from "@/lib/services/decks";
 import { MainTabs } from "@/app/components/MainTabs";
 
-async function getTerms(): Promise<Term[]> {
-  const { data, error } = await supabase
-    .from("terms")
-    .select("*, deck:decks(id, name, created_at)")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    console.error("Supabase error (terms):", error.message);
-    return [];
-  }
-  return data ?? [];
-}
-
-async function getDecks(): Promise<Deck[]> {
-  const { data, error } = await supabase
-    .from("decks")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    console.error("Supabase error (decks):", error.message);
-    return [];
-  }
-  return data ?? [];
-}
-
 export default async function Home() {
-  const [terms, decks] = await Promise.all([getTerms(), getDecks()]);
+  const [terms, decks] = await Promise.all([fetchTerms(), fetchDecks()]);
 
   return (
     <main className="min-h-screen bg-default-50 p-6 md:p-10">
